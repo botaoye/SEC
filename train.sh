@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 python train_net.py --config-file ./configs/Base-SEC.yaml --num-gpus 1 --resume

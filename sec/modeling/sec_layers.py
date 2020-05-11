@@ -3,8 +3,18 @@ import pydensecrf.densecrf as dcrf
 import torch
 from pydensecrf.utils import unary_from_softmax
 from torch.autograd import Variable
+import torchsnooper
 
 min_prob = 0.0001
+
+
+def softmax_layer(preds):
+    preds = preds
+    pred_max, _ = torch.max(preds, dim=1, keepdim=True)
+    pred_exp = torch.exp(preds - pred_max.clone().detach())
+    probs = pred_exp / torch.sum(pred_exp, dim=1, keepdim=True) + min_prob
+    probs = probs / torch.sum(probs, dim=1, keepdim=True)
+    return probs
 
 
 def seed_loss_layer(fc8_sec_softmax, cues):
@@ -21,6 +31,7 @@ def seed_loss_layer(fc8_sec_softmax, cues):
     return loss_balanced
 
 
+# @torchsnooper.snoop()
 def expand_loss_layer(fc8_sec_softmax, labels, height, width, num_class):
     """
     :param fc8_sec_softmax: (batch_size, num_class + 1 (including background), height // 8, width // 8)
@@ -60,7 +71,9 @@ def expand_loss_layer(fc8_sec_softmax, labels, height, width, num_class):
 
     # boolean vector that only training label is true and others are false.
     # (1 - stat2d ) shows one-hot vector that only train label is 0 and others are 1.
-    stat_2d = (stat[:, 0, 0, :] > 0.5).float()
+    # TODO figure out the reason
+    # stat_2d = (stat[:, 0, 0, :] > 0.5).float()
+    stat_2d = stat.squeeze(1).squeeze(1).float()
 
     # loss for the class equivalent to training label
     loss_1 = -torch.mean(torch.sum((stat_2d * torch.log(probs_mean) / torch.sum(stat_2d, dim=1, keepdim=True)), dim=1))

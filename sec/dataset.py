@@ -6,6 +6,7 @@ import os
 import pickle
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 from detectron2.structures import BoxMode
 from detectron2.data import DatasetCatalog, MetadataCatalog
@@ -29,39 +30,29 @@ def load_voc_instances(dirname: str, split: str):
         dirname: Contain "Annotations", "ImageSets", "JPEGImages"
         split (str): one of "train", "test", "val", "trainval"
     """
-    with PathManager.open(os.path.join(dirname, "ImageSets", "Main", split + ".txt")) as f:
+    with PathManager.open(os.path.join(dirname, split + ".txt")) as f:
         fileids = np.loadtxt(f, dtype=np.str)
-
-    with PathManager.open(os.path.join(dirname, "ImageSets", "Segmentation", split + ".txt")) as f:
-        seg_fileids = np.loadtxt(f, dtype=np.str)
 
     cls_labels_file = os.path.join(dirname, "cls_labels.npy")
     cls_labels_dict = np.load(cls_labels_file).item()
 
     dicts = []
     count = 0
-    for fileid in fileids:
+    for fileid in tqdm(fileids):
         jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".jpg")
-        if fileid in seg_fileids:
-            seg_file = os.path.join(dirname, "SegmentationClass", fileid + ".png")
-        else:
-            seg_file = "no_seg_label"
+        seg_file = os.path.join(dirname, "SegmentationClass", fileid + ".png")
 
         im = Image.open(jpeg_file)
         width, height = im.size
-
-        localization_cues_path = os.path.join(dirname, "weak-localization/localization_cues.pickle")
-        with open(localization_cues_path, "rb") as f:
-            localization_cues = pickle.load(f)
 
         r = {
             "file_name": jpeg_file,
             "seg_file": seg_file,
             "image_id": fileid,
+            "image_order": count,
             "height": height,
             "width": width,
             "label": cls_labels_dict[fileid],
-            "localization_cues": localization_cues,
         }
         dicts.append(r)
         count += 1
@@ -74,7 +65,12 @@ def register_pascal_voc(name, dirname, split, year):
     MetadataCatalog.get(name).set(
         thing_classes=CLASS_NAMES, dirname=dirname, year=year, split=split
     )
+    if "train" in split:
+        localization_cues_path = os.path.join(dirname, "weak-localization/localization_cues.pickle")
+        with open(localization_cues_path, "rb") as f:
+            localization_cues = pickle.load(f)
+            MetadataCatalog.get(name).set(localization_cues=localization_cues)
 
 
-register_pascal_voc("ws_voc_2012_train", "./datasets/VOC2012", "train", 2012)
-register_pascal_voc("ws_voc_2012_val", "./datasets/VOC2012", "val", 2012)
+register_pascal_voc("ws_voc_2012_train", "./datasets/VOC2012AUG", "train_aug_id", 2012)
+register_pascal_voc("ws_voc_2012_val", "./datasets/VOC2012AUG", "val_id", 2012)

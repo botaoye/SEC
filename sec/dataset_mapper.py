@@ -7,7 +7,7 @@ from fvcore.common.file_io import PathManager
 from PIL import Image
 
 from detectron2.structures import Instances, BoxMode, Boxes
-from detectron2.data import detection_utils as utils
+from detectron2.data import detection_utils as utils, MetadataCatalog
 from detectron2.data import transforms as T
 
 """
@@ -41,7 +41,7 @@ class DatasetMapper:
         else:
             self.crop_gen = None
 
-        self.tfm_gens = utils.build_transform_gen(cfg, is_train)
+        self.tfm_gens = build_transform_gen(cfg, is_train)
 
         # fmt: off
         self.img_format     = cfg.INPUT.FORMAT
@@ -49,6 +49,7 @@ class DatasetMapper:
         self.mask_format    = cfg.INPUT.MASK_FORMAT
         self.keypoint_on    = cfg.MODEL.KEYPOINT_ON
         self.load_proposals = cfg.MODEL.LOAD_PROPOSALS
+        self.training_datasets = cfg.DATASETS.TRAIN
         # fmt: on
         if self.keypoint_on and is_train:
             # Flip only makes sense in training
@@ -111,7 +112,7 @@ class DatasetMapper:
             )
 
         # transfer label to Pytorch tensor
-        dataset_dict["label"] = torch.tensor(dataset_dict["label"], dtype=torch.int64)
+        # dataset_dict["label"] = torch.tensor(dataset_dict["label"], dtype=torch.int64)
 
         if not self.is_train:
             # USER: Modify this if you want to keep them for some reason.
@@ -148,51 +149,61 @@ class DatasetMapper:
             sem_seg_gt = torch.as_tensor(sem_seg_gt.astype("long"))
             dataset_dict["sem_seg"] = sem_seg_gt
 
-        if "localization_cues" in dataset_dict:
-
-            _, sem_seg_gt = get_localization_cues(dataset_dict["localization_cues"],
-                                                  dataset_dict["image_id"],
-                                                  dataset_dict["height"],
-                                                  dataset_dict["width"],
+        # add localization cues
+        # TODO change hard code of h, w here
+        localization_cues = MetadataCatalog.get(self.training_datasets[0]).localization_cues
+        label, sem_seg_gt = get_localization_cues(localization_cues,
+                                                  str(dataset_dict["image_order"]),
+                                                  41,
+                                                  41,
                                                   dataset_dict["label"].shape[-1])
-
-            sem_seg_gt = transforms.apply_segmentation(sem_seg_gt)
-            sem_seg_gt = torch.as_tensor(sem_seg_gt.astype("float"))
-            dataset_dict["sem_seg"] = sem_seg_gt
+        dataset_dict["label"] = torch.tensor(label, dtype=torch.int64)
+        # sem_seg_gt = transforms.apply_segmentation(sem_seg_gt)
+        sem_seg_gt = torch.as_tensor(sem_seg_gt.astype("float"))
+        dataset_dict["sem_seg"] = sem_seg_gt
 
         return dataset_dict
 
 
 def get_localization_cues(localization_cues, image_id, height, width, num_class):
-    labels = np.zeros(num_class)
+    label_seed = np.zeros((1, 1, num_class + 1))
+    label_seed[0, 0, localization_cues["%s_labels" % image_id]] = 1.
+    cues = np.zeros([num_class + 1, height, width])
+    cues_i = localization_cues["%s_cues" % image_id]
+    cues[cues_i[0], cues_i[1], cues_i[2]] = 1.
+    return label_seed.astype(np.float32), cues.astype(np.float32)
 
-    cues_key = image_id + "_cues"
-    cues_i = localization_cues[cues_key]
 
-    labels_key = image_id + "_labels"
-    labels_i = localization_cues[labels_key]
+def build_transform_gen(cfg, is_train):
+    """
+    Create a list of :class:`TransformGen` from config.
+    Now it includes resizing and flipping.
 
-    labels_i = labels_i.tolist()  # labels_i doesn't contain background
+    Returns:
+        list[TransformGen]
+    """
+    if is_train:
+        min_size = cfg.INPUT.MIN_SIZE_TRAIN
+        max_size = cfg.INPUT.MAX_SIZE_TRAIN
+        sample_style = cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
+    else:
+        min_size = cfg.INPUT.MIN_SIZE_TEST
+        max_size = cfg.INPUT.MAX_SIZE_TEST
+        sample_style = "choice"
+    if sample_style == "range":
+        assert len(min_size) == 2, "more than 2 ({}) min_size(s) are provided for ranges".format(
+            len(min_size)
+        )
 
-    for lab in labels_i:
-        labels[lab] = 1
-
-    gt_temp = np.zeros((height // 8, width // 8))
-
-    for idx, class_index in enumerate(cues_i[0]):  # cues_i is (label_array, height_array, width_array)
-        gt_temp[cues_i[1, idx], cues_i[2, idx]] = cues_i[0, idx]
-
-    gt_temp = gt_temp.astype('float')
-
-    gt_temp_trues = np.zeros((height // 8, width // 8, num_class))
-
-    for lab in labels_i:
-        gt_temp_trues[:, :, lab] = (gt_temp == lab).astype('float')
-
-    dense_gt = gt_temp_trues
-    dense_gt = dense_gt.transpose((2, 0, 1))
-
-    return labels, dense_gt
+    logger = logging.getLogger(__name__)
+    tfm_gens = []
+    # tfm_gens.append(T.ResizeShortestEdge(min_size, max_size, sample_style))
+    # resize transform
+    tfm_gens.append(T.Resize((321, 321)))
+    if is_train:
+        # tfm_gens.append(T.RandomFlip())
+        logger.info("TransformGens used in training: " + str(tfm_gens))
+    return tfm_gens
 
 
 def annotations_to_instances_metaws(annos, image_size):

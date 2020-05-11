@@ -3,20 +3,19 @@ MODEL:
   BACKBONE:
     NAME: "build_vgg16_backbone"
   SEM_SEG_HEAD:
-    NAME: "SemSegFPNHead"
-    IN_FEATURES: ["res5"]
+    NAME: "DeepLabLargeFOVHead"
+    IN_FEATURES: ["conv5", ]
     NUM_CLASSES: 20
     IGNORE_VALUE: 255
     CONVS_DIM: 1024
-    COMMON_STRIDE: 4
+    COMMON_STRIDE: 2
     NORM: "GN"
-    LOSS_WEIGHT: 1.0
 DATASETS:
-  TRAIN: ('ws_voc_2012_trainval',)
+  TRAIN: ('ws_voc_2012_train',)
   TEST: ('ws_voc_2012_val',)
 SOLVER:
-  IMS_PER_BATCH: 1
-  BASE_LR: 0.0005
+  IMS_PER_BATCH: 15
+  BASE_LR: 0.001
   STEPS: (20000, )
   MAX_ITER: 35000
   WARMUP_FACTOR: 0.1

@@ -13,7 +13,7 @@ from detectron2.structures import ImageList
 from detectron2.utils.registry import Registry
 
 
-from sec.modeling.sec_layers import seed_loss_layer, expand_loss_layer, crf_layer, constrain_loss_layer
+from sec.modeling.sec_layers import seed_loss_layer, expand_loss_layer, crf_layer, constrain_loss_layer, softmax_layer
 
 
 @META_ARCH_REGISTRY.register()
@@ -65,8 +65,6 @@ class SEC(nn.Module):
 
         features = self.backbone(images.tensor)
 
-        b, c, h, w = images.tensor.shape
-
         if "sem_seg" in batched_inputs[0]:
             targets = [x["sem_seg"].to(self.device) for x in batched_inputs]
             targets = ImageList.from_tensors(
@@ -75,28 +73,38 @@ class SEC(nn.Module):
         else:
             targets = None
 
-        labels = [x["labels"].to(self.device) for x in batched_inputs]
+        labels = [x["label"].to(self.device) for x in batched_inputs]
         labels = torch.stack(labels, dim=0)
 
-        pred_mask = self.sem_seg_head(features, targets)
+        pred_mask = self.sem_seg_head(features)
 
-        # get downscaled images (change to hwc, original chw)
-        downscaled_images = [x["image"].to(self.device) for x in batched_inputs]
-        downscaled_images = ImageList.from_tensors(downscaled_images, self.backbone.size_divisibility)
-        downscaled_images = F.interpolate(downscaled_images.tensor.numpy().transpose(1, 2, 0).astype(np.uint8),
-                                          size=(pred_mask.shape[-2], pred_mask.shape[-1]),
-                                          mode='bilinear', align_corners=False)
-
-        fc8_sec_softmax = pred_mask
         if self.training:
+            # get downscaled images
+            downscaled_images = [x["image"] for x in batched_inputs]
+            downscaled_images = ImageList.from_tensors(downscaled_images, self.backbone.size_divisibility)
+            downscaled_images = F.interpolate(downscaled_images.tensor.float(),
+                                              size=(pred_mask.shape[-2], pred_mask.shape[-1]),
+                                              mode='bilinear', align_corners=False)
+
+            # from bgr to rgb
+            downscaled_images = downscaled_images.numpy()
+            downscaled_images = downscaled_images[:, ::-1, :, :]
+            downscaled_images = torch.from_numpy(np.ascontiguousarray(downscaled_images))
+            # from bchw to bhwc
+            downscaled_images = downscaled_images.permute(0, 2, 3, 1).contiguous().to(torch.uint8)
+            fc8_sec_softmax = softmax_layer(pred_mask)
+
+            # cal loss
             loss_s = seed_loss_layer(fc8_sec_softmax, targets)
-            loss_e = expand_loss_layer(fc8_sec_softmax, labels, h // 8, w // 8, self.num_classes)
+            loss_e = expand_loss_layer(fc8_sec_softmax, labels,
+                                       fc8_sec_softmax.shape[-2], fc8_sec_softmax.shape[-1],
+                                       self.num_classes + 1)
             crf_result = crf_layer(fc8_sec_softmax, downscaled_images, 10)
             loss_c = constrain_loss_layer(fc8_sec_softmax, crf_result)
             return {"loss_s": loss_s, "loss_e": loss_e, "loss_c": loss_c}
 
         processed_results = []
-        for result, input_per_image, image_size in zip(results, batched_inputs, images.image_sizes):
+        for result, input_per_image, image_size in zip(pred_mask, batched_inputs, images.image_sizes):
             height = input_per_image.get("height")
             width = input_per_image.get("width")
             r = sem_seg_postprocess(result, image_size, height, width)
@@ -117,8 +125,8 @@ class SECSemSegHead(nn.Module):
 
         # fmt: off
         self.in_features      = cfg.MODEL.SEM_SEG_HEAD.IN_FEATURES
-        feature_strides       = {k: v.stride for k, v in input_shape.items()}
-        feature_channels      = {k: v.channels for k, v in input_shape.items()}
+        feature_strides = {k: v.stride for k, v in input_shape.items()}
+        feature_channels = {k: v.channels for k, v in input_shape.items()}
         self.ignore_value     = cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE
         num_classes           = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES
         conv_dims             = cfg.MODEL.SEM_SEG_HEAD.CONVS_DIM
@@ -147,10 +155,10 @@ class SECSemSegHead(nn.Module):
                 )
                 weight_init.c2_msra_fill(conv)
                 head_ops.append(conv)
-                if feature_strides[in_feature] != self.common_stride:
-                    head_ops.append(
-                        nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-                    )
+                # if feature_strides[in_feature] != self.common_stride:
+                #     head_ops.append(
+                #         nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+                #     )
             self.scale_heads.append(nn.Sequential(*head_ops))
             self.add_module(in_feature, self.scale_heads[-1])
         self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
@@ -163,5 +171,48 @@ class SECSemSegHead(nn.Module):
             else:
                 x = x + self.scale_heads[i](features[f])
         x = self.predictor(x)
-        x = F.interpolate(x, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        # x = F.interpolate(x, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+
+        return x
+
+
+@SEM_SEG_HEADS_REGISTRY.register()
+class DeepLabLargeFOVHead(nn.Module):
+    """
+    A semantic segmentation head described DeepLabLargeFOV
+    """
+
+    def __init__(self, cfg, input_shape: Dict[str, ShapeSpec]):
+        super().__init__()
+
+        num_classes = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES
+        self.ignore_value = cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE
+
+        self.max_pool = nn.MaxPool2d((3, 3), (1, 1), (1, 1), ceil_mode=True)
+        self.avg_pool = nn.AvgPool2d((3, 3), (1, 1), (1, 1), ceil_mode=True)  # AvgPool2d,
+
+        self.fc6 = nn.Conv2d(512, 1024, kernel_size=3, padding=12, dilation=12)
+        self.relu6 = nn.ReLU()
+        self.dropout6 = nn.Dropout2d(0.5)
+        self.fc7 = nn.Conv2d(1024, 1024, kernel_size=1)
+        self.relu7 = nn.ReLU()
+        self.dropout7 = nn.Dropout2d(0.5)
+        self.fc8 = nn.Conv2d(1024, num_classes + 1, kernel_size=1)
+
+        weight_init.c2_msra_fill(self.fc6)
+        weight_init.c2_msra_fill(self.fc7)
+        weight_init.c2_msra_fill(self.fc8)
+
+    def forward(self, features):
+        x = features["conv5"]
+        x = self.max_pool(x)
+        x = self.avg_pool(x)
+        x = self.fc6(x)
+        x = self.relu6(x)
+        x = self.dropout6(x)
+        x = self.fc7(x)
+        x = self.relu7(x)
+        x = self.dropout7(x)
+        x = self.fc8(x)
+
         return x
