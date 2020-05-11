@@ -73,12 +73,12 @@ class SEC(nn.Module):
         else:
             targets = None
 
-        labels = [x["label"].to(self.device) for x in batched_inputs]
-        labels = torch.stack(labels, dim=0)
-
         pred_mask = self.sem_seg_head(features)
 
         if self.training:
+            labels = [x["label"].to(self.device) for x in batched_inputs]
+            labels = torch.stack(labels, dim=0)
+
             # get downscaled images
             downscaled_images = [x["image"] for x in batched_inputs]
             downscaled_images = ImageList.from_tensors(downscaled_images, self.backbone.size_divisibility)

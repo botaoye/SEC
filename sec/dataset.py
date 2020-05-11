@@ -36,6 +36,14 @@ def load_voc_instances(dirname: str, split: str):
     cls_labels_file = os.path.join(dirname, "cls_labels.npy")
     cls_labels_dict = np.load(cls_labels_file).item()
 
+    if "train" in split:
+        input_list_file = os.path.join(dirname, "input_list.txt")
+        with PathManager.open(input_list_file) as f:
+            input_list = {}
+            for line in f:
+                (key, val) = line.split()
+                input_list[key.split('.')[0]] = val
+
     dicts = []
     count = 0
     for fileid in tqdm(fileids):
@@ -49,11 +57,13 @@ def load_voc_instances(dirname: str, split: str):
             "file_name": jpeg_file,
             "seg_file": seg_file,
             "image_id": fileid,
-            "image_order": count,
             "height": height,
             "width": width,
             "label": cls_labels_dict[fileid],
         }
+
+        if "train" in split:
+            r["image_order"] = input_list[fileid]
         dicts.append(r)
         count += 1
     # print(count)

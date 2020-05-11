@@ -26,16 +26,14 @@ class Trainer(DefaultTrainer):
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
         output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
-        evaluators = [COCOEvaluator(dataset_name, cfg, True, output_folder)]
-        if cfg.MODEL.DENSEPOSE_ON:
-            evaluators.append(SemSegEvaluator(
-                    dataset_name,
-                    distributed=True,
-                    num_classes=cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES + 1,
-                    ignore_label=cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
-                    output_dir=output_folder,
-                ))
-        return DatasetEvaluators(evaluators)
+        evaluator_list = [SemSegEvaluator(
+            dataset_name,
+            distributed=True,
+            num_classes=cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES + 1,
+            ignore_label=cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
+            output_dir=output_folder,
+            )]
+        return DatasetEvaluators(evaluator_list)
 
     @classmethod
     def build_test_loader(cls, cfg, dataset_name):

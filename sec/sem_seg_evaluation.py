@@ -67,7 +67,7 @@ class SemSegEvaluator(DatasetEvaluator):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=np.int)
             if input["seg_file"] == "no_seg_label":
-                continue
+                raise
             with PathManager.open(input["seg_file"], "rb") as f:
                 gt = np.array(Image.open(f), dtype=np.int)
 
