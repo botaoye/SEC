@@ -168,9 +168,25 @@ class DatasetMapper:
 def get_localization_cues(localization_cues, image_id, height, width, num_class):
     label_seed = np.zeros((1, 1, num_class + 1))
     label_seed[0, 0, localization_cues["%s_labels" % image_id]] = 1.
+
+    # method 1
     cues = np.zeros([num_class + 1, height, width])
     cues_i = localization_cues["%s_cues" % image_id]
     cues[cues_i[0], cues_i[1], cues_i[2]] = 1.
+
+    # # method 2
+    # gt_temp = np.zeros((height, height))
+    # H = gt_temp.shape[0]
+    # W = gt_temp.shape[1]
+    # cues_i = localization_cues["%s_cues" % image_id]
+    # for idx in range(len(cues_i[0])):
+    #     if cues_i[1, idx] < H and cues_i[2, idx] < W:
+    #         gt_temp[cues_i[1, idx], cues_i[2, idx]] = cues_i[0, idx]
+    # gt_temp2 = np.zeros((num_class + 1, height, width))
+    # for lab in localization_cues["%s_labels" % image_id]:
+    #     gt_temp2[lab, :, :] = (gt_temp == lab).astype('float')
+    #
+    # assert (cues == gt_temp2).all()
     return label_seed.astype(np.float32), cues.astype(np.float32)
 
 

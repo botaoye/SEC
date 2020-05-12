@@ -5,6 +5,7 @@ import fvcore.nn.weight_init as weight_init
 import torch
 from detectron2.modeling import META_ARCH_REGISTRY, build_backbone, SEM_SEG_HEADS_REGISTRY, build_sem_seg_head
 from detectron2.modeling.postprocessing import sem_seg_postprocess
+from detectron2.utils.events import get_event_storage
 from torch import nn
 from torch.nn import functional as F
 
@@ -14,6 +15,7 @@ from detectron2.utils.registry import Registry
 
 
 from sec.modeling.sec_layers import seed_loss_layer, expand_loss_layer, crf_layer, constrain_loss_layer, softmax_layer
+from sec.torch_utils import vis_segmentation
 
 
 @META_ARCH_REGISTRY.register()
@@ -26,6 +28,7 @@ class SEC(nn.Module):
         super().__init__()
 
         self.num_classes = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES
+        self.vis_period = cfg.VIS_PERIOD
 
         self.device = torch.device(cfg.MODEL.DEVICE)
 
@@ -76,8 +79,9 @@ class SEC(nn.Module):
         pred_mask = self.sem_seg_head(features)
 
         if self.training:
+            # TODO figure out why float is necessary
             labels = [x["label"].to(self.device) for x in batched_inputs]
-            labels = torch.stack(labels, dim=0)
+            labels = torch.stack(labels, dim=0).to(torch.float)
 
             # get downscaled images
             downscaled_images = [x["image"] for x in batched_inputs]
@@ -86,13 +90,20 @@ class SEC(nn.Module):
                                               size=(pred_mask.shape[-2], pred_mask.shape[-1]),
                                               mode='bilinear', align_corners=False)
 
-            # from bgr to rgb
-            downscaled_images = downscaled_images.numpy()
-            downscaled_images = downscaled_images[:, ::-1, :, :]
-            downscaled_images = torch.from_numpy(np.ascontiguousarray(downscaled_images))
+            # # from bgr to rgb
+            # downscaled_images = downscaled_images.numpy()
+            # downscaled_images = downscaled_images[:, ::-1, :, :]
+            # downscaled_images = torch.from_numpy(np.ascontiguousarray(downscaled_images))
             # from bchw to bhwc
             downscaled_images = downscaled_images.permute(0, 2, 3, 1).contiguous().to(torch.uint8)
             fc8_sec_softmax = softmax_layer(pred_mask)
+
+            # vis label
+            if self.vis_period > 0:
+                storage = get_event_storage()
+                if storage.iter % self.vis_period == 0:
+                    for i in range(labels.shape[0]):
+                        vis_segmentation(targets[i].cpu().numpy().astype("int64"), np.ascontiguousarray(downscaled_images[i]))
 
             # cal loss
             loss_s = seed_loss_layer(fc8_sec_softmax, targets)
@@ -102,6 +113,7 @@ class SEC(nn.Module):
             crf_result = crf_layer(fc8_sec_softmax, downscaled_images, 10)
             loss_c = constrain_loss_layer(fc8_sec_softmax, crf_result)
             return {"loss_s": loss_s, "loss_e": loss_e, "loss_c": loss_c}
+            # return {"loss": torch.tensor(0.0, requires_grad=True)}
 
         processed_results = []
         for result, input_per_image, image_size in zip(pred_mask, batched_inputs, images.image_sizes):
@@ -188,9 +200,6 @@ class DeepLabLargeFOVHead(nn.Module):
         num_classes = cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES
         self.ignore_value = cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE
 
-        self.max_pool = nn.MaxPool2d((3, 3), (1, 1), (1, 1), ceil_mode=True)
-        self.avg_pool = nn.AvgPool2d((3, 3), (1, 1), (1, 1), ceil_mode=True)  # AvgPool2d,
-
         self.fc6 = nn.Conv2d(512, 1024, kernel_size=3, padding=12, dilation=12)
         self.relu6 = nn.ReLU()
         self.dropout6 = nn.Dropout2d(0.5)
@@ -205,8 +214,6 @@ class DeepLabLargeFOVHead(nn.Module):
 
     def forward(self, features):
         x = features["conv5"]
-        x = self.max_pool(x)
-        x = self.avg_pool(x)
         x = self.fc6(x)
         x = self.relu6(x)
         x = self.dropout6(x)

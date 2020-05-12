@@ -71,9 +71,7 @@ def expand_loss_layer(fc8_sec_softmax, labels, height, width, num_class):
 
     # boolean vector that only training label is true and others are false.
     # (1 - stat2d ) shows one-hot vector that only train label is 0 and others are 1.
-    # TODO figure out the reason
-    # stat_2d = (stat[:, 0, 0, :] > 0.5).float()
-    stat_2d = stat.squeeze(1).squeeze(1).float()
+    stat_2d = (stat[:, 0, 0, :] > 0.5).float()
 
     # loss for the class equivalent to training label
     loss_1 = -torch.mean(torch.sum((stat_2d * torch.log(probs_mean) / torch.sum(stat_2d, dim=1, keepdim=True)), dim=1))

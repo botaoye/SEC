@@ -1,10 +1,13 @@
 _BASE_: "./Base-SEC.yaml"
 MODEL:
-  PIXEL_MEAN: [102.9801, 115.9465, 122.7717]
-  # PIXEL_STD: [57.375, 57.120, 58.395]
+  PIXEL_MEAN: [123.675, 116.280, 103.530]
   BACKBONE:
-    NAME: "build_vgg16_backbone"
-#  WEIGHTS: "/home/ybt/meta-ws/output/models/vgg_new.pth"
+    NAME: "build_deeplab_vgg16_backbone"
+  WEIGHTS: "./output/models/vgg_new.pth"
+INPUT:
+  FORMAT: "RGB"
+VIS_PERIOD: 0
+
 #  VGG:
 #    # OUT_FEATURES: ["conv5", ]
 #    FREEZE_AT: 2
